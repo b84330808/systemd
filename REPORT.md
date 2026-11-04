@@ -13,6 +13,7 @@
 | 1 | `fix/percent-util-negative-fraction` | `4ebf9e789485ca263d58131a3fc4f605648f339c` | percent-util: refuse negative values with a zero integer part |
 | 2 | `fix/time-util-timestamp-size-check` | `48ba27c32aaea5842c2f3645561f2582607817f5` | time-util: fix operator precedence in format_timestamp_style() size check |
 | 3 | `fix/time-util-epoch-timestamp-range` | `9358d3a6dd8a829ca85758f052ba8b3b2b728402` | time-util: apply the timestamp range check to "@" timestamps, too |
+| 4 | `fix/env-util-extended-expansion-nest` | `16e0d8c139ef8c50f0b0609bce002a7f34c6baed` | env-util: fix nesting level after unsupported "${FOO:" syntax |
 
 Private finding, see local follow-up: hexdecoct
 
@@ -351,3 +352,89 @@ Queries: `parse_timestamp @`, `"@infinity"`, `timestamp epoch @ syntax`, `parse_
 > accepted and then displayed as "--- XXXX-XX-XX XX:XX:XX", and "@infinity" was accepted as
 > USEC_INFINITY, while "10000-01-01 UTC" and "+infinity" are refused. Let "@" timestamps go
 > through the same final checks as the other syntaxes.
+
+---
+
+## Fix 4: env-util: fix nesting level after unsupported "${FOO:" syntax
+
+Branch `fix/env-util-extended-expansion-nest`, head `16e0d8c139ef8c50f0b0609bce002a7f34c6baed`.
+
+Commits:
+
+1. `394ec8c862` README: add review reminder required by AGENTS.md (drop before submitting)
+2. `16e0d8c139` env-util: fix nesting level after unsupported "${FOO:" syntax
+
+Found by code reading (no upstream issue). In `replace_env_full()` (`src/basic/env-util.c`), with
+`REPLACE_ENV_ALLOW_EXTENDED` (used by `env-file.c`'s `merge_env_file()`, i.e. environment.d via
+`systemd-environment-d-generator`), `${` increments `nest`. In the `TEST` state, i.e. after
+`${FOO:`, any character other than `-`/`+` is treated as unsupported syntax and falls back to
+`WORD`, but `nest` is not decremented. After that, no later `${BAR:-x}`/`${BAR:+x}` in the same
+value can get back to `nest == 0`, so it is left unexpanded: `FOO=${FOO:x}${XXX:-baz}` stays as is
+instead of becoming `${FOO:x}baz`. Same bug class as the merged #20941 (5ef97a7122, missing
+`nest--` after a plain `${FOO}`). Fix: decrement `nest` in that branch. The other `state = WORD`
+fallback (`:` without `REPLACE_ENV_ALLOW_EXTENDED`) doesn't need it, since `nest` is only consulted
+in the extended-only `DEFAULT_VALUE`/`ALTERNATE_VALUE` states.
+
+### Test commands
+
+```bash
+meson test -C build -v test-env-util
+```
+
+Also run for regressions, all OK after the fix: `meson test -C build test-env-util test-env-file test-fileio`.
+
+### Fail before (fix not applied, tests added)
+
+```
+src/test/test-env-util.c:266: Assertion failed: Expected "z == extended ? "FOO=${FOO:x}baz" : "FOO=${FOO:x}${XXX:-baz}"", got "FOO=${FOO:x}${XXX:-baz} != FOO=${FOO:x}baz"
+1/1 test - systemd:test-env-util FAIL            0.19s   killed by signal 6 SIGABRT
+Ok:                0
+Fail:              1
+```
+
+### Pass after
+
+```
+1/3 test - systemd:test-env-file OK              0.06s
+2/3 test - systemd:test-env-util OK              0.01s
+3/3 test - systemd:test-fileio   OK              0.02s
+Ok:                3
+Fail:              0
+```
+
+### Competing PR / issue search (systemd/systemd, issues and PRs, all states)
+
+Queries: `replace_env nest`, `env-util extended`, `environment.d expansion`,
+`environment.d default value not expanded`, `environment.d ":-"`, `replace_env empty`. Only related
+hit: #20941 (closed, merged 2021, the analogous fix for `${FOO}`). #42424 (closed) only changed
+the man page.
+
+### PR body draft
+
+> With REPLACE_ENV_ALLOW_EXTENDED, "${FOO:" followed by something other than "-" or "+" is left
+> unexpanded, but the nesting level was not decremented, so any later "${BAR:-...}" or
+> "${BAR:+...}" in the same string was left unexpanded too. E.g. "FOO=${FOO:x}${XXX:-baz}" in
+> environment.d was not expanded to "${FOO:x}baz". This is the same issue #20941 fixed for
+> "${FOO}".
+
+---
+
+## Other leads, not fixed
+
+These came out of a code-reading pass over `src/basic` (env-util, string-util, user-util, uid-range)
+and were *not* independently re-verified or fixed here. They're candidates for follow-up PRs:
+
+- `replace_env_full()`: `${FOO:-default}` / `${FOO:+alt}` test whether `FOO` is *set*, not whether
+  it is *empty*. With `FOO=` set but empty, `${FOO:-def}` gives `""` and `${FOO:+alt}` gives `alt`.
+  `environment.d(5)` says "unless the expansion would be empty" / "would have expanded to a
+  non-empty value" (and shell `:-`/`:+` behave that way), while the 2016 commit message b82f58bfe3
+  says "if the environment variable isn't already set". Fixing it changes behavior, so it needs a
+  maintainer decision (code vs. docs); not fixed here.
+- `strv_env_replace_consume()` (env-util.c): "Drop other occurrences" calls
+  `strv_env_unset(f + 1, *f)` with the full `NAME=value` string, which only matches exact
+  duplicates, so other `NAME=` entries survive. Low reachability.
+- `find_line()` / `find_line_after()` (string-util.c): only check the first line that *starts
+  with* the needle, so `find_line("foobar\nfoo\n", "foo")` returns NULL. Only caller is repart's
+  `--append-fstab=auto`.
+- `mangle_gecos()` (user-util.c) doesn't replace 0x7F, which `valid_gecos()` rejects.
+- `uid_range_overlaps()` (uid-range.c) treats adjacent ranges as overlapping; no callers.
