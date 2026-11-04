@@ -236,7 +236,8 @@ static void test_replace_env2(bool extended) {
                 "BAR=bar",
                 NULL
         };
-        _cleanup_free_ char *t = NULL, *s = NULL, *q = NULL, *r = NULL, *p = NULL, *x = NULL, *y = NULL;
+        _cleanup_free_ char *t = NULL, *s = NULL, *q = NULL, *r = NULL, *p = NULL, *x = NULL, *y = NULL,
+                *z = NULL, *w = NULL;
         unsigned flags = REPLACE_ENV_ALLOW_EXTENDED*extended;
 
         ASSERT_OK(replace_env("FOO=${FOO:-${BAR}}", (char**) env, flags, &t));
@@ -259,6 +260,13 @@ static void test_replace_env2(bool extended) {
 
         ASSERT_OK(replace_env("FOO=${FOO}between${BAR:-baz}", (char**) env, flags, &y));
         ASSERT_STREQ(y, extended ? "FOO=foobetweenbar" : "FOO=foobetween${BAR:-baz}");
+
+        /* Unsupported syntax after ":" must not affect later expansions */
+        ASSERT_OK(replace_env("FOO=${FOO:x}${XXX:-baz}", (char**) env, flags, &z));
+        ASSERT_STREQ(z, extended ? "FOO=${FOO:x}baz" : "FOO=${FOO:x}${XXX:-baz}");
+
+        ASSERT_OK(replace_env("FOO=${FOO:=x}${BAR:+alt}", (char**) env, flags, &w));
+        ASSERT_STREQ(w, extended ? "FOO=${FOO:=x}alt" : "FOO=${FOO:=x}${BAR:+alt}");
 }
 
 TEST(replace_env) {

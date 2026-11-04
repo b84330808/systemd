@@ -785,7 +785,9 @@ int replace_env_full(
                         else if (*e == '+')
                                 state = ALTERNATE_VALUE;
                         else {
+                                /* Unsupported syntax, i.e. do no replacement, but leave this nesting level */
                                 state = WORD;
+                                nest--;
                                 break;
                         }
 
