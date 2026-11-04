@@ -840,8 +840,13 @@ static int parse_timestamp_impl(
                         return -EINVAL;
         }
 
-        if (t[0] == '@' && !with_tz)
-                return parse_sec(t + 1, ret);
+        if (t[0] == '@' && !with_tz) {
+                r = parse_sec(t + 1, &usec);
+                if (r < 0)
+                        return r;
+
+                goto finish;
+        }
 
         usec = now(CLOCK_REALTIME);
 

@@ -101,6 +101,7 @@ int main(int argc, char *argv[]) {
         test_should_fail("1969-12-31 UTC");
         test_should_fail("-1000y");
         test_should_fail("today UTC UTC");
+        test_should_fail("@infinity");
         if (access("/usr/share/zoneinfo/Asia/Seoul", F_OK) >= 0) {
                 test_should_fail("now Asia/Seoul");
                 test_should_fail("+2d Asia/Seoul");
@@ -110,9 +111,13 @@ int main(int argc, char *argv[]) {
         test_should_pass("9999-12-30 23:59:59 UTC");
         test_should_fail("9999-12-31 00:00:00 UTC");
         test_should_fail("10000-01-01 00:00:00 UTC");
+        test_should_pass("@253402214399");
+        test_should_fail("@253402214400");
 #elif SIZEOF_TIME_T == 4
         test_should_pass("2038-01-18 03:14:07 UTC");
         test_should_fail("2038-01-18 03:14:08 UTC");
+        test_should_pass("@2147397247");
+        test_should_fail("@2147397248");
 #endif
 
         return 0;
