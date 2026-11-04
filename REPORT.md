@@ -11,6 +11,7 @@
 | # | Branch | Head SHA | Proposed PR title |
 |---|--------|----------|-------------------|
 | 1 | `fix/percent-util-negative-fraction` | `4ebf9e789485ca263d58131a3fc4f605648f339c` | percent-util: refuse negative values with a zero integer part |
+| 2 | `fix/time-util-timestamp-size-check` | `48ba27c32aaea5842c2f3645561f2582607817f5` | time-util: fix operator precedence in format_timestamp_style() size check |
 
 Every fix branch starts with a commit `README: add review reminder required by AGENTS.md`,
 which prepends two lines to `README.md`. Upstream's `AGENTS.md` makes this a hard rule for AI
@@ -151,3 +152,82 @@ percentages but don't touch `percent-util.c` or `parse-util.c` (checked by fetch
 > e.g. CPUQuota=-0.5% was silently applied as 0.5%. Refuse the "-" explicitly.
 >
 > The second commit fixes the same issue in parse_loadavg_fixed_point().
+
+---
+
+## Fix 2: time-util: fix operator precedence in format_timestamp_style() size check
+
+Branch `fix/time-util-timestamp-size-check`, head `48ba27c32aaea5842c2f3645561f2582607817f5`.
+
+Commits:
+
+1. `00334d609a` README: add review reminder required by AGENTS.md (drop before submitting)
+2. `48ba27c32a` time-util: fix operator precedence in format_timestamp_style() size check
+
+Found by reading the code (no upstream issue). The minimum-size check at the top of
+`format_timestamp_style()` (`src/basic/time-util.c`) reads
+
+```c
+if (l < (size_t) (3 + 1 + 10 + style == TIMESTAMP_DATE ? 0 : (1 + 8 + (us ? 1 + 6 : 0) + 1 + (utc ? 3 : 1)) + 1))
+```
+
+`+` binds tighter than `==`, which binds tighter than `?:`, so this is
+`(14 + style == TIMESTAMP_DATE) ? 0 : (...) + 1`; the condition is never true and the weekday and
+date are never counted. The check requires 12..21 bytes instead of 15..35. For normal timestamps the
+later `strftime()` calls still catch a short buffer, but for timestamps past
+`USEC_TIMESTAMP_FORMATTABLE_MAX` the `"--- XXXX-XX-XX ..."` placeholder is `strcpy()`ed guarded only
+by `assert(l >= strlen(xxx[style]) + 1)`, so a 12..23 byte buffer aborts instead of returning NULL,
+and with `NDEBUG` (where `assert()` becomes `__builtin_unreachable()`) it would overflow the
+buffer. All in-tree callers pass `FORMAT_TIMESTAMP_MAX` (38) sized buffers and the function is not
+public API, so this is latent: not a reachable vulnerability. Fix: add the missing parentheses. I
+grepped `src/` (single- and multi-line) for the same `a + b == C ? x : y` pattern; this is the only
+instance.
+
+The new test calls `format_timestamp_style()` with every buffer size from 0 up to the result
+length for each style, checks it returns NULL and does not write past the given size, and checks
+the full-size result.
+
+### Test commands
+
+```bash
+meson test -C build -v test-time-util
+```
+
+Also run for regressions, all OK after the fix: `meson test -C build test-time-util test-calendarspec test-date`.
+
+### Fail before (fix reverted with `git checkout upstream/main -- src/basic/time-util.c`, test kept)
+
+```
+test-time-util: ../src/basic/time-util.c:397: format_timestamp_style: Assertion `l >= strlen(xxx[style]) + 1' failed.
+#8  0x00005555555680d7 in test_format_timestamp_short_buffer_one (val=253402214399000001, style=TIMESTAMP_PRETTY, result=0x5555555756b6 "--- XXXX-XX-XX XX:XX:XX") at ../src/test/test-time-util.c:710
+        l = 12
+1/1 test - systemd:test-time-util FAIL             0.22s   killed by signal 6 SIGABRT
+Ok:                0
+Fail:              1
+```
+
+### Pass after
+
+```
+1/1 test - systemd:test-time-util OK               0.02s
+Ok:                1
+Fail:              0
+```
+
+### Competing PR / issue search (systemd/systemd, issues and PRs, all states)
+
+Queries: `format_timestamp_style`, `format_timestamp precedence`, `time-util precedence`,
+`TIMESTAMP_DATE length`, `format_timestamp buffer size check`, `XXXX-XX-XX`,
+`format_timestamp assertion`. No issue or PR about this bug. Possibly overlapping: open issue
+#42441 "never say XXXX-XX-XX XX:XX:XX when talking to humans" asks to change the placeholder text
+itself; no PR for it was found. If that lands first, this patch may need a rebase, but the size
+check is still needed.
+
+### PR body draft
+
+> The minimum buffer size check in format_timestamp_style() was missing parentheses around the
+> ?: expression, so it was parsed as (3 + 1 + 10 + style == TIMESTAMP_DATE) ? 0 : ..., which
+> never counted the weekday and date. For timestamps that are too large to format, the
+> "--- XXXX-XX-XX ..." placeholder is then copied with only an assert() checking the size, so a
+> buffer of 12 to 23 bytes hits the assertion instead of getting NULL back. No caller in the tree
+> passes such a short buffer, so this is not triggered in practice.
