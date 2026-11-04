@@ -48,6 +48,10 @@ git rebase --onto 696175871c <README-commit-sha> <branch>
   - build/test rules: use `meson test -C build -v <test>` directly, run clang-tidy tests if a
     compatible clang-tidy is available.
 - Commits are authored `b84330808 <b84330808@gmail.com>`.
+- Upstream CI runs Claude-based reviewers on PRs (base commit: "ci: give the Claude reviewers the
+  UAPI specifications"); expect automated review comments in addition to maintainer review.
+- Before submitting, upstream expects the test suite to be run locally (`meson test -C build`);
+  only the targeted tests listed below were run here, not the full suite.
 
 ## Environment
 
