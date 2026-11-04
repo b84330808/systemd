@@ -12,6 +12,7 @@
 |---|--------|----------|-------------------|
 | 1 | `fix/percent-util-negative-fraction` | `4ebf9e789485ca263d58131a3fc4f605648f339c` | percent-util: refuse negative values with a zero integer part |
 | 2 | `fix/time-util-timestamp-size-check` | `48ba27c32aaea5842c2f3645561f2582607817f5` | time-util: fix operator precedence in format_timestamp_style() size check |
+| 3 | `fix/time-util-epoch-timestamp-range` | `9358d3a6dd8a829ca85758f052ba8b3b2b728402` | time-util: apply the timestamp range check to "@" timestamps, too |
 
 Every fix branch starts with a commit `README: add review reminder required by AGENTS.md`,
 which prepends two lines to `README.md`. Upstream's `AGENTS.md` makes this a hard rule for AI
@@ -231,3 +232,116 @@ check is still needed.
 > "--- XXXX-XX-XX ..." placeholder is then copied with only an assert() checking the size, so a
 > buffer of 12 to 23 bytes hits the assertion instead of getting NULL back. No caller in the tree
 > passes such a short buffer, so this is not triggered in practice.
+
+---
+
+## Fix 3: time-util: apply the timestamp range check to "@" timestamps, too
+
+Branch `fix/time-util-epoch-timestamp-range`, head `9358d3a6dd8a829ca85758f052ba8b3b2b728402`.
+
+Commits:
+
+1. `65af4d4756` README: add review reminder required by AGENTS.md (drop before submitting)
+2. `9358d3a6dd` time-util: apply the timestamp range check to "@" timestamps, too
+
+Found by reading the code (no upstream issue). `parse_timestamp()` refuses results after
+`USEC_TIMESTAMP_FORMATTABLE_MAX` (9999-12-30 23:59:59 UTC on 64-bit), added in 1bb4b028a3 (2017,
+"time-util: refuse formatting/parsing times that we can't store ... so that we never end up
+formatting dates we can't parse and vice versa"). But the `@` (seconds since the epoch) branch in
+`parse_timestamp_impl()` does `return parse_sec(t + 1, ret);` and skips that check (it predates
+it, from 2014). Since `parse_sec()` also accepts `infinity`, `parse_timestamp("@infinity")` returned
+`USEC_INFINITY`, and `"@300000000000"` was accepted, while the equivalent `"10000-01-01 UTC"` and
+`"+infinity"` are refused. `systemd.time(7)` documents `@` as taking "an integer". Callers that
+take the value as-is include `journalctl --since/--until`, `coredumpctl --since/--until`,
+`systemd-creds --timestamp/--not-after`, `homectl` timestamp fields, `timedatectl set-time`,
+`systemd-analyze timestamp` and networkd's DUID-LLT time; `systemctl --when=` refuses infinity
+itself. Fix: route the `@` branch through the same final checks (`goto finish`). `@<seconds>` with
+time units (e.g. `@5min`) still works. Fix 2 and fix 3 both touch `src/basic/time-util.c` but in
+different functions and don't conflict.
+
+### Reproducer with the real binary (`build/systemd-analyze`)
+
+Before:
+
+```
+$ systemd-analyze timestamp @infinity
+  Original form: @infinity
+Normalized form: -
+   UNIX seconds: @18446744073709.551615
+       From now: -
+$ systemd-analyze timestamp @300000000000
+  Original form: @300000000000
+Normalized form: --- XXXX-XX-XX XX:XX:XX
+   UNIX seconds: @300000000000
+       From now: 9449 years 7 months left
+$ systemd-analyze timestamp '10000-01-01 UTC'
+Failed to parse "10000-01-01 UTC": Invalid argument
+$ systemd-analyze timestamp +infinity
+Failed to parse "+infinity": Invalid argument
+```
+
+After:
+
+```
+$ systemd-analyze timestamp @infinity
+Failed to parse "@infinity": Invalid argument
+$ systemd-analyze timestamp @300000000000
+Failed to parse "@300000000000": Invalid argument
+$ systemd-analyze timestamp @253402214399
+  Original form: @253402214399
+Normalized form: Thu 9999-12-30 23:59:59 UTC
+   UNIX seconds: @253402214399
+       From now: 7972 years 11 months left
+$ systemd-analyze timestamp @1395716396
+Normalized form: Tue 2014-03-25 02:59:56 UTC
+```
+
+### Test commands
+
+```bash
+meson test -C build -v test-date
+```
+
+New cases in `src/test/test-date.c`: `@infinity` must fail; on 64-bit `@253402214399` must pass
+(and round-trip) and `@253402214400` must fail; on 32-bit `@2147397247` / `@2147397248`, matching the
+existing `2038-01-18 03:14:07 UTC` boundary tests. Also run for regressions, all OK after the fix:
+`meson test -C build test-date test-time-util test-calendarspec`.
+
+### Fail before (fix not applied, tests added)
+
+```
+Test: @infinity
+"@infinity" → "@18446744073709551615" (unexpected)
+src/test/test-date.c:48: Assertion failed: Expected "r < 0", but 0 >= 0
+1/1 test - systemd:test-date FAIL            0.22s   killed by signal 6 SIGABRT
+Ok:                0
+Fail:              1
+```
+
+### Pass after
+
+```
+Test: @253402214399
+"@253402214399" → "Thu 9999-12-30 23:59:59.000000 UTC"
+Test: @253402214400
+1/3 test - systemd:test-time-util    OK               0.02s
+2/3 test - systemd:test-calendarspec OK               0.02s
+3/3 test - systemd:test-date         OK               0.01s
+Ok:                3
+Fail:              0
+```
+
+### Competing PR / issue search (systemd/systemd, issues and PRs, all states)
+
+Queries: `parse_timestamp @`, `"@infinity"`, `timestamp epoch @ syntax`, `parse_timestamp infinity`,
+`USEC_TIMESTAMP_FORMATTABLE_MAX`. No issue or PR about this. Related, already merged and different:
+#6327 (2017, refuse very old dates), #34672 (merged, introduced `TIMESTAMP_UNIX` output),
+#29049 (accept `2012-09-22T16:34[:22]`). Issue #6290 (closed) is about very old `--since` dates.
+
+### PR body draft
+
+> parse_timestamp() refuses timestamps that are too large to be formatted, but the "@" syntax
+> returned the result of parse_sec() directly and skipped that check. So "@300000000000" was
+> accepted and then displayed as "--- XXXX-XX-XX XX:XX:XX", and "@infinity" was accepted as
+> USEC_INFINITY, while "10000-01-01 UTC" and "+infinity" are refused. Let "@" timestamps go
+> through the same final checks as the other syntaxes.
