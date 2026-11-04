@@ -335,7 +335,7 @@ Fail:              0
 
 Queries: `parse_timestamp @`, `"@infinity"`, `timestamp epoch @ syntax`, `parse_timestamp infinity`,
 `USEC_TIMESTAMP_FORMATTABLE_MAX`. No issue or PR about this. Related, already merged and different:
-#6327 (2017, refuse very old dates), #34672 (merged, introduced `TIMESTAMP_UNIX` output),
+#6327 (2017, refuse very old dates), #34672 (merged, timezone parsing fixes for `systemd-analyze timestamp`),
 #29049 (accept `2012-09-22T16:34[:22]`). Issue #6290 (closed) is about very old `--since` dates.
 
 ### PR body draft
