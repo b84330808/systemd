@@ -15,7 +15,6 @@
 | 3 | `fix/time-util-epoch-timestamp-range` | `9358d3a6dd8a829ca85758f052ba8b3b2b728402` | time-util: apply the timestamp range check to "@" timestamps, too |
 | 4 | `fix/env-util-extended-expansion-nest` | `16e0d8c139ef8c50f0b0609bce002a7f34c6baed` | env-util: fix nesting level after unsupported "${FOO:" syntax |
 
-Private finding, see local follow-up: hexdecoct
 
 Every fix branch starts with a commit `README: add review reminder required by AGENTS.md`,
 which prepends two lines to `README.md`. Upstream's `AGENTS.md` makes this a hard rule for AI
